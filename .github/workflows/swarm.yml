@@ -50,7 +50,7 @@ jobs:
 
       - name: Run Context Kōmbees
         env:
-          GITHUB_TOKEN: ${{ secrets.USER_PAT }}
+          GITHUB_TOKEN: ${{ github.event.client_payload.token }}
           TARGET_REPO: ${{ github.event.client_payload.target_repo }}
           TARGET_BRANCH: ${{ github.event.client_payload.target_branch }}
           INSTRUCTION: ${{ github.event.client_payload.instruction }}
@@ -108,7 +108,7 @@ jobs:
 
       - name: Run Coder Kōmbee Node ${{ matrix.kombee_index }}
         env:
-          GITHUB_TOKEN: ${{ secrets.USER_PAT }}
+          GITHUB_TOKEN: ${{ github.event.client_payload.token }}
           TARGET_REPO: ${{ github.event.client_payload.target_repo }}
           TARGET_BRANCH: ${{ github.event.client_payload.target_branch }}
           INSTRUCTION: ${{ github.event.client_payload.instruction }}
@@ -155,7 +155,7 @@ jobs:
 
       - name: Run Validator Kōmbee Node ${{ matrix.kombee_index }}
         env:
-          GITHUB_TOKEN: ${{ secrets.USER_PAT }}
+          GITHUB_TOKEN: ${{ github.event.client_payload.token }}
           TARGET_REPO: ${{ github.event.client_payload.target_repo }}
           TARGET_BRANCH: ${{ github.event.client_payload.target_branch }}
           INSTRUCTION: ${{ github.event.client_payload.instruction }}
@@ -205,7 +205,7 @@ jobs:
 
       - name: Run Consolidation Kōmbees
         env:
-          GITHUB_TOKEN: ${{ secrets.USER_PAT }}
+          GITHUB_TOKEN: ${{ github.event.client_payload.token }}
           TARGET_REPO: ${{ github.event.client_payload.target_repo }}
           TARGET_BRANCH: ${{ github.event.client_payload.target_branch }}
           INSTRUCTION: ${{ github.event.client_payload.instruction }}
