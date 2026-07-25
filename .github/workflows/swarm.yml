@@ -219,6 +219,7 @@ jobs:
           TARGET_BRANCH: ${{ github.event.client_payload.target_branch }}
           INSTRUCTION: ${{ github.event.client_payload.instruction }}
           PR_NUMBER: ${{ github.event.client_payload.pr_number }}
+          ISSUE_NUMBER: ${{ github.event.client_payload.issue_number }}
           DRONE_UPLINK_URL: ${{ github.event.client_payload.drone_uplink }}
           WORKER_ID: ${{ github.event.client_payload.worker_id }}
         run: node swarm_runner.js --phase consolidation
