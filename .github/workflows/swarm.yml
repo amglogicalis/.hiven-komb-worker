@@ -123,7 +123,7 @@ jobs:
           INSTRUCTION: ${{ github.event.client_payload.instruction }}
           FILES_TO_EDIT: ${{ github.event.client_payload.files }}
           KOMBEE_INDEX: ${{ matrix.kombee_index }}
-        run: node swarm_runner.js --phase execution
+        run: node swarm_runner.js --phase execution --index ${{ matrix.kombee_index }}
 
       - name: Upload Coder Output
         uses: actions/upload-artifact@v4
@@ -169,7 +169,7 @@ jobs:
           TARGET_BRANCH: ${{ github.event.client_payload.target_branch }}
           INSTRUCTION: ${{ github.event.client_payload.instruction }}
           KOMBEE_INDEX: ${{ matrix.kombee_index }}
-        run: node swarm_runner.js --phase validation
+        run: node swarm_runner.js --phase validation --index ${{ matrix.kombee_index }}
 
       - name: Upload Validation Output
         uses: actions/upload-artifact@v4
