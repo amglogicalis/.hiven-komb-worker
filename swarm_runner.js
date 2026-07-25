@@ -23,7 +23,7 @@ const args = process.argv.slice(2);
 const phaseArg = args.indexOf("--phase");
 const indexArg = args.indexOf("--index");
 const PHASE = phaseArg !== -1 ? args[phaseArg + 1] : "standalone";
-const KOMBEE_INDEX = indexArg !== -1 ? parseInt(args[indexArg + 1], 10) : 1;
+const KOMBEE_INDEX = indexArg !== -1 ? parseInt(args[indexArg + 1], 10) : (process.env.KOMBEE_INDEX ? parseInt(process.env.KOMBEE_INDEX, 10) : 1);
 
 // Environment Parameters
 const {
