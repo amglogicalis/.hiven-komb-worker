@@ -47,6 +47,15 @@ jobs:
             if curl -s http://localhost:11434/api/tags > /dev/null; then break; fi
             sleep 2
           done
+      - name: Debug Environment Variables
+        run: |
+          echo "Checking trigger payload variables:"
+          echo "TARGET_REPO is set: ${{ github.event.client_payload.target_repo != '' }}"
+          echo "TARGET_BRANCH is set: ${{ github.event.client_payload.target_branch != '' }}"
+          echo "INSTRUCTION is set: ${{ github.event.client_payload.instruction != '' }}"
+          echo "TOKEN is set: ${{ github.event.client_payload.token != '' }}"
+          echo "FILES_TO_EDIT is set: ${{ github.event.client_payload.files != '' }}"
+
 
       - name: Run Context Kōmbees
         env:
