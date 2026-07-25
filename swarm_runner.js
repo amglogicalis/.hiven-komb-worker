@@ -33,6 +33,7 @@ const {
   INSTRUCTION,
   FILES_TO_EDIT,
   PR_NUMBER,
+  ISSUE_NUMBER,
   DRONE_UPLINK_URL,
   WORKER_ID
 } = process.env;
@@ -248,8 +249,10 @@ Respond ONLY with a single JSON object containing "complexity" ("LOW" or "HIGH")
       if (complexity === "HIGH") {
         plannerModel = "qwen2.5-coder:1.5b";
         console.log(chalk.magenta(`[!] High Complexity Planning. Scaling Architect Kōmbee up to ${plannerModel}!`));
-        execSync(`ollama pull ${plannerModel}`, { stdio: "inherit" });
       }
+
+      console.log(`[*] Pulling planner model ${plannerModel}...`);
+      execSync(`ollama pull ${plannerModel}`, { stdio: "inherit" });
 
       // 2. Task Decomposition (Option A)
       console.log("[*] Running Architect Kōmbee to decompose instruction...");
@@ -518,12 +521,14 @@ CRITICAL: You must preserve the existing outer file structure, function signatur
       runGit(`checkout -b ${patchBranch}`);
       runGit("add .");
       
+      let prUrl = null;
       try {
         runGit(`commit -m "feat(hiven): swarm modification for instruction\n\nInstruction: ${INSTRUCTION}"`);
         runGit(`push origin ${patchBranch}`);
         
         if (TARGET_REPO === "mock/repo" || process.env.MOCK_GIT === "true") {
           console.log(chalk.green(`[Simulated Octokit] Opened Pull Request for ${patchBranch} -> ${TARGET_BRANCH}`));
+          prUrl = `https://github.com/${TARGET_REPO}/pull/mock-1`;
         } else {
           // Open Pull Request
           const [owner, repo] = TARGET_REPO.split("/");
@@ -550,9 +555,55 @@ ${context.plan}
           });
           
           console.log(chalk.green(`[+] Pull Request created successfully: ${pr.data.html_url}`));
+          prUrl = pr.data.html_url;
         }
       } catch (e) {
-        console.warn("[-] Failed to commit or push codebase edits:", e.message);
+        console.warn("[-] Failed to commit or push codebase edits (likely read-only query):", e.message);
+      }
+
+      // Post comment back to the issue/PR if ISSUE_NUMBER is provided
+      if (ISSUE_NUMBER && TARGET_REPO !== "mock/repo" && process.env.MOCK_GIT !== "true") {
+        try {
+          const [owner, repo] = TARGET_REPO.split("/");
+          const issueNum = parseInt(ISSUE_NUMBER, 10);
+          console.log(`[*] Posting final response to issue #${issueNum}...`);
+          
+          let commentBody = "";
+          if (prUrl) {
+            commentBody = `### 🐝 Hiven Swarm Execution Complete!
+            
+I have successfully implemented your requested changes in a new Pull Request!
+
+👉 **[View Pull Request](${prUrl})**
+
+#### 📋 Swarm Plan:
+${context.plan}
+
+#### ⚙️ Metrics:
+* **Selected Coder:** Kōmbee Node #${bestCandidate.kombeeIndex} (\`${bestCandidate.model}\`)
+* **Complexity Level:** \`${context.complexity}\`
+`;
+          } else {
+            commentBody = `### 🐝 Swarm Analysis Complete!
+
+I have completed the analysis for your request: **"${INSTRUCTION}"**
+
+${context.plan}
+
+---
+*Metrics: Coder Kōmbee Node #${bestCandidate.kombeeIndex} (${bestCandidate.model}) | Complexity: ${context.complexity}*`;
+          }
+
+          await octokit.issues.createComment({
+            owner,
+            repo,
+            issue_number: issueNum,
+            body: commentBody
+          });
+          console.log("[+] Response comment posted successfully!");
+        } catch (commentErr) {
+          console.error("[-] Failed to post comment back to issue:", commentErr.message);
+        }
       }
 
       // Persist honey.db
