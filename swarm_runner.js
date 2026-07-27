@@ -165,7 +165,7 @@ function sendTelemetry(state, message) {
 
   try {
     const url = new URL(DRONE_UPLINK_URL);
-    const lib = url.protocol === "https:" ? require("https") : require("http");
+    const lib = url.protocol === "https:" ? https : http;
 
     const req = lib.request(url.toString(), {
       method: "POST",
