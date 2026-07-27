@@ -7,6 +7,7 @@ import { execSync } from "child_process";
 import fs from "fs";
 import path from "path";
 import http from "http";
+import https from "https";
 import crypto from "crypto";
 import chalk from "chalk";
 
@@ -648,6 +649,7 @@ Respond ONLY with a single JSON object containing "complexity" ("LOW", "MEDIUM",
       }
 
       console.log(`[+] Task Complexity Assessed: ${complexity}.`);
+      const requiresHeavyCoder = complexity === "HIGH";
 
       // Determine planning model (Expert Routing)
       let plannerModel = MODELS.PLANNER_LOW;
