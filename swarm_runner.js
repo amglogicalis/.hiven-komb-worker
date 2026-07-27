@@ -155,6 +155,20 @@ function sendTelemetry(state, message) {
   if (!DRONE_UPLINK_URL) return Promise.resolve();
   
   return new Promise((resolve) => {
+    let resolved = false;
+    const done = () => {
+      if (!resolved) {
+        resolved = true;
+        resolve();
+      }
+    };
+
+    // Safety timeout: resolve after 5 seconds to prevent hanging the runner
+    const timeoutId = setTimeout(() => {
+      console.error("[-] Telemetry request timed out");
+      done();
+    }, 5000);
+
     const payload = JSON.stringify({
       workerId: WORKER_ID,
       kombeeIndex: typeof KOMBEE_INDEX !== 'undefined' ? KOMBEE_INDEX : 1,
@@ -177,19 +191,22 @@ function sendTelemetry(state, message) {
       }, (res) => {
         res.on("data", () => {});
         res.on("end", () => {
-          resolve();
+          clearTimeout(timeoutId);
+          done();
         });
       });
 
       req.on("error", (e) => {
         console.error("[-] Telemetry report failed:", e.message);
-        resolve();
+        clearTimeout(timeoutId);
+        done();
       });
       req.write(payload);
       req.end();
     } catch (err) {
       console.error("[-] Telemetry setup failed:", err.message);
-      resolve();
+      clearTimeout(timeoutId);
+      done();
     }
   });
 }
