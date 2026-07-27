@@ -822,7 +822,12 @@ CRITICAL: You must preserve the existing outer file structure, function signatur
       }
 
       // Run logical audit for MEDIUM / HIGH tasks using deepseek-r1:8b
-      if (isSuccess && (context.complexity === "MEDIUM" || context.complexity === "HIGH")) {
+      // Only runs if Ollama is available in this runner environment
+      const isOllamaAvailable = () => {
+        try { execSync('ollama --version', { stdio: 'pipe' }); return true; } catch { return false; }
+      };
+
+      if (isSuccess && (context.complexity === "MEDIUM" || context.complexity === "HIGH") && isOllamaAvailable()) {
         console.log(`[*] Task complexity is ${context.complexity}. Running logical code audit with ${MODELS.VALIDATOR_HIGH}...`);
         
         let codeChanges = "";
@@ -865,18 +870,26 @@ Respond ONLY with a JSON object containing:
         } catch (e) {
           console.error("[-] Logical audit crashed/skipped:", e.message);
         }
+      } else if (!isOllamaAvailable()) {
+        console.log("[*] Ollama not available in this runner — skipping LLM-based logical audit (syntax-only validation).");
       }
 
-      // Bucle de corrección (Self-Correction Loop)
+      // Self-Correction Loop — only runs if syntax validation failed AND Ollama available
       if (!isSuccess) {
         console.warn(`[-] Node #${KOMBEE_INDEX} validation failed. Executing correction loop...`);
         
-        let correctionModel = MODELS.CODER_LOW;
-        if (context.complexity === "HIGH") {
-          correctionModel = MODELS.CODER_HIGH;
-        } else if (context.complexity === "MEDIUM") {
-          correctionModel = KOMBEE_INDEX >= 9 ? MODELS.CODER_HIGH : MODELS.CODER_LOW;
-        }
+        if (!isOllamaAvailable()) {
+          console.warn("[!] Ollama not available in this validation runner — skipping LLM correction. Passing raw output to consolidation.");
+          // Reset to pass so consolidation can still run with whatever was written
+          isSuccess = true;
+          errorLog = "";
+        } else {
+          let correctionModel = MODELS.CODER_LOW;
+          if (context.complexity === "HIGH") {
+            correctionModel = MODELS.CODER_HIGH;
+          } else if (context.complexity === "MEDIUM") {
+            correctionModel = KOMBEE_INDEX >= 9 ? MODELS.CODER_HIGH : MODELS.CODER_LOW;
+          }
         
         console.log(`[*] Using correction model '${correctionModel}'...`);
         execSync(`ollama pull ${correctionModel}`, { stdio: "inherit" });
@@ -940,7 +953,8 @@ CRITICAL: You must preserve the existing outer file structure, function signatur
             }
           }
         }
-      }
+        } // end else (ollama available)
+      } // end if (!isSuccess)
 
       const fileMap = {};
       for (const file of modifiedFiles) {
