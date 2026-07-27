@@ -1,5 +1,5 @@
 # swarm.yml
-# Hiven Worker Swarm Workflow Template - Multi-Stage KÅmbee Pipeline
+# Hiven Worker Swarm Workflow Template - Multi-Stage Kōmbee Pipeline
 # Role: Principal Distributed Systems & MLOps Architect
 
 name: Hiven Swarm Execution
@@ -15,7 +15,7 @@ permissions:
 
 jobs:
   # ==========================================================
-  # FASE 1: CONTEXT (Reader & Architect KÅmbees)
+  # FASE 1: CONTEXT (Reader & Architect Kōmbees)
   # ==========================================================
   phase1-context:
     runs-on: ubuntu-latest
@@ -57,7 +57,7 @@ jobs:
           echo "FILES_TO_EDIT is set: ${{ github.event.client_payload.files != '' }}"
 
 
-      - name: Run Context KÅmbees
+      - name: Run Context Kōmbees
         env:
           GITHUB_TOKEN: ${{ github.event.client_payload.token }}
           TARGET_REPO: ${{ github.event.client_payload.target_repo }}
@@ -76,7 +76,7 @@ jobs:
           path: swarm_context.json
 
   # ==========================================================
-  # FASE 2: EXECUTION (Coder KÅmbees Matrix Strategy)
+  # FASE 2: EXECUTION (Coder Kōmbees Matrix Strategy)
   # ==========================================================
   phase2-execution:
     needs: phase1-context
@@ -118,7 +118,7 @@ jobs:
             sleep 2
           done
 
-      - name: Run Coder KÅmbee Node ${{ matrix.kombee_index }}
+      - name: Run Coder Kōmbee Node ${{ matrix.kombee_index }}
         env:
           GITHUB_TOKEN: ${{ github.event.client_payload.token }}
           TARGET_REPO: ${{ github.event.client_payload.target_repo }}
@@ -138,7 +138,7 @@ jobs:
           path: coder_output_${{ matrix.kombee_index }}.json
 
   # ==========================================================
-  # FASE 3: VALIDATION (Tester & Reviewer KÅmbees)
+  # FASE 3: VALIDATION (Tester & Reviewer Kōmbees)
   # ==========================================================
   phase3-validation:
     needs: phase2-execution
@@ -168,7 +168,7 @@ jobs:
         with:
           name: coder-output-${{ matrix.kombee_index }}
 
-      - name: Run Validator KÅmbee Node ${{ matrix.kombee_index }}
+      - name: Run Validator Kōmbee Node ${{ matrix.kombee_index }}
         env:
           GITHUB_TOKEN: ${{ github.event.client_payload.token }}
           TARGET_REPO: ${{ github.event.client_payload.target_repo }}
@@ -187,7 +187,7 @@ jobs:
           path: validation_output_${{ matrix.kombee_index }}.json
 
   # ==========================================================
-  # FASE 4: CONSOLIDATION (Committer & Uplink KÅmbees)
+  # FASE 4: CONSOLIDATION (Committer & Uplink Kōmbees)
   # ==========================================================
   phase4-consolidation:
     needs: phase3-validation
@@ -221,7 +221,7 @@ jobs:
           pattern: validation-output-*
           merge-multiple: true
 
-      - name: Run Consolidation KÅmbees
+      - name: Run Consolidation Kōmbees
         env:
           GITHUB_TOKEN: ${{ github.event.client_payload.token }}
           TARGET_REPO: ${{ github.event.client_payload.target_repo }}
