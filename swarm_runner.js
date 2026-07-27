@@ -793,6 +793,10 @@ CRITICAL: You must preserve the existing outer file structure, function signatur
         modifiedFiles.push(fileName);
       }
 
+      // Run syntax checks (Validation Kōmbees)
+      let isSuccess = true;
+      let errorLog = "";
+
       if (modifiedFiles.length === 0 && context.files.length > 0) {
         // Fallback writing using smart helper
         const writtenFile = writeCodeCleanly(coderData.coderOutput, context.files[0], context.files, context.plan, INSTRUCTION);
@@ -803,10 +807,6 @@ CRITICAL: You must preserve the existing outer file structure, function signatur
           errorLog += "Failed to parse code output: Coder model returned invalid layout or JSON changes.\n";
         }
       }
-
-      // Run syntax checks (Validation Kōmbees)
-      let isSuccess = true;
-      let errorLog = "";
 
       for (const file of modifiedFiles) {
         const filePath = path.join(TARGET_DIR, file);
