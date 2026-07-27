@@ -152,39 +152,46 @@ async function updateStatusComment(currentPhase, state) {
 
 // Helper to send telemetry to the Queen
 function sendTelemetry(state, message) {
-  if (!DRONE_UPLINK_URL) return;
+  if (!DRONE_UPLINK_URL) return Promise.resolve();
   
-  const payload = JSON.stringify({
-    workerId: WORKER_ID,
-    kombeeIndex: typeof KOMBEE_INDEX !== 'undefined' ? KOMBEE_INDEX : 1,
-    phase: PHASE,
-    state,
-    message,
-    timestamp: new Date().toISOString()
+  return new Promise((resolve) => {
+    const payload = JSON.stringify({
+      workerId: WORKER_ID,
+      kombeeIndex: typeof KOMBEE_INDEX !== 'undefined' ? KOMBEE_INDEX : 1,
+      phase: PHASE,
+      state,
+      message,
+      timestamp: new Date().toISOString()
+    });
+
+    try {
+      const url = new URL(DRONE_UPLINK_URL);
+      const lib = url.protocol === "https:" ? https : http;
+
+      const req = lib.request(url.toString(), {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Content-Length": Buffer.byteLength(payload)
+        }
+      }, (res) => {
+        res.on("data", () => {});
+        res.on("end", () => {
+          resolve();
+        });
+      });
+
+      req.on("error", (e) => {
+        console.error("[-] Telemetry report failed:", e.message);
+        resolve();
+      });
+      req.write(payload);
+      req.end();
+    } catch (err) {
+      console.error("[-] Telemetry setup failed:", err.message);
+      resolve();
+    }
   });
-
-  try {
-    const url = new URL(DRONE_UPLINK_URL);
-    const lib = url.protocol === "https:" ? https : http;
-
-    const req = lib.request(url.toString(), {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Content-Length": Buffer.byteLength(payload)
-      }
-    }, (res) => {
-      res.resume();
-    });
-
-    req.on("error", (e) => {
-      console.error("[-] Telemetry report failed:", e.message);
-    });
-    req.write(payload);
-    req.end();
-  } catch (err) {
-    console.error("[-] Telemetry setup failed:", err.message);
-  }
 }
 
 // Helper to execute git command on target directory
@@ -556,7 +563,7 @@ async function main() {
       // ==========================================================
       console.log("[*] Running Phase 1 Context Kōmbees...");
       await updateStatusComment("context", "running");
-      sendTelemetry("running", "Phase 1 Context Kōmbees starting...");
+      await sendTelemetry("running", "Phase 1 Context Kōmbees starting...");
       checkoutCodebase();
       const honeyDb = loadHoneyDb();
 
@@ -669,7 +676,7 @@ Output a numbered list of concrete implementation steps, each referencing specif
       fs.writeFileSync("swarm_context.json", JSON.stringify(swarmContext, null, 2), "utf-8");
       console.log("[+] Context saved to swarm_context.json.");
       await updateStatusComment("context", "done");
-      sendTelemetry("done", "Phase 1 Context complete. plan generated.");
+      await sendTelemetry("done", "Phase 1 Context complete. plan generated.");
     }
     
     else if (PHASE === "execution") {
@@ -680,7 +687,7 @@ Output a numbered list of concrete implementation steps, each referencing specif
       if (KOMBEE_INDEX === 1) {
         await updateStatusComment("execution", "running");
       }
-      sendTelemetry("running", `Coder Node #${KOMBEE_INDEX} processing...`);
+      await sendTelemetry("running", `Coder Node #${KOMBEE_INDEX} processing...`);
       const context = JSON.parse(fs.readFileSync("swarm_context.json", "utf-8"));
       
       // Determine model based on 3-tier complexity
@@ -736,7 +743,7 @@ CRITICAL: You must preserve the existing outer file structure, function signatur
       };
       fs.writeFileSync(`coder_output_${KOMBEE_INDEX}.json`, JSON.stringify(resultPayload, null, 2), "utf-8");
       console.log(`[+] Coder Kōmbee output saved to coder_output_${KOMBEE_INDEX}.json.`);
-      sendTelemetry("done", `Coder Node #${KOMBEE_INDEX} completed.`);
+      await sendTelemetry("done", `Coder Node #${KOMBEE_INDEX} completed.`);
     }
 
     else if (PHASE === "validation") {
@@ -748,7 +755,7 @@ CRITICAL: You must preserve the existing outer file structure, function signatur
         await updateStatusComment("execution", "done");
         await updateStatusComment("validation", "running");
       }
-      sendTelemetry("running", `Validator Node #${KOMBEE_INDEX} checking syntax...`);
+      await sendTelemetry("running", `Validator Node #${KOMBEE_INDEX} checking syntax...`);
       checkoutCodebase();
       const context = JSON.parse(fs.readFileSync("swarm_context.json", "utf-8"));
       const coderData = JSON.parse(fs.readFileSync(`coder_output_${KOMBEE_INDEX}.json`, "utf-8"));
@@ -931,7 +938,7 @@ CRITICAL: You must preserve the existing outer file structure, function signatur
       
       fs.writeFileSync(`validation_output_${KOMBEE_INDEX}.json`, JSON.stringify(validationPayload, null, 2), "utf-8");
       console.log(`[+] Validation results for Node #${KOMBEE_INDEX} saved.`);
-      sendTelemetry("done", `Validator Node #${KOMBEE_INDEX} completed.`);
+      await sendTelemetry("done", `Validator Node #${KOMBEE_INDEX} completed.`);
     }
 
     else if (PHASE === "consolidation") {
@@ -941,7 +948,7 @@ CRITICAL: You must preserve the existing outer file structure, function signatur
       console.log("[*] Running Phase 4 Consolidation Kōmbees...");
       await updateStatusComment("validation", "done");
       await updateStatusComment("consolidation", "running");
-      sendTelemetry("running", "Phase 4 Consolidation starting...");
+      await sendTelemetry("running", "Phase 4 Consolidation starting...");
       checkoutCodebase();
       const context = JSON.parse(fs.readFileSync("swarm_context.json", "utf-8"));
       const honeyDb = loadHoneyDb();
@@ -1092,11 +1099,11 @@ ${context.plan}
         console.log(`[+] Routing telemetry to Drone: ${DRONE_UPLINK_URL}`);
       }
       await updateStatusComment("consolidation", "done");
-      sendTelemetry("done", prUrl ? `Swarm complete. PR created: ${prUrl}` : `Swarm complete. Response: ${context.plan.substring(0, 150)}...`);
+      await sendTelemetry("done", prUrl ? `Swarm complete. PR created: ${prUrl}` : `Swarm complete. Response: ${context.plan.substring(0, 150)}...`);
     }
   } catch (error) {
     console.error(chalk.red(`[!] Critical error in Phase [${PHASE}] execution:`), error);
-    sendTelemetry("error", `Critical error in Phase [${PHASE}]: ${error.message}`);
+    await sendTelemetry("error", `Critical error in Phase [${PHASE}]: ${error.message}`);
     process.exit(1);
   }
 }
