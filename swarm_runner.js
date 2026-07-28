@@ -964,7 +964,34 @@ Output a numbered list of concrete implementation steps, each referencing specif
       }
       await sendTelemetry("running", `Coder Node #${KOMBEE_INDEX} processing...`);
       const context = JSON.parse(fs.readFileSync("swarm_context.json", "utf-8"));
-      
+      checkoutCodebase();
+
+      // Re-read files from actual checkout with higher limit (40k per file)
+      // RAG context was truncated to 8k per file — coder needs more to avoid
+      // generating partial outputs that destroy pre-existing code.
+      const CODER_FILE_MAX = 40000;
+      let fullCoderContext = '';
+      let coderTotalChars = 0;
+      const truncatedFiles = [];
+      for (const file of context.files) {
+        const filePath = path.join(TARGET_DIR, file);
+        if (fs.existsSync(filePath)) {
+          let content = fs.readFileSync(filePath, 'utf-8');
+          if (content.length > CODER_FILE_MAX) {
+            content = content.slice(0, CODER_FILE_MAX);
+            truncatedFiles.push(file);
+          }
+          const ext = path.extname(file).slice(1) || '';
+          fullCoderContext += `\n### File: ${file}\n\`\`\`${ext}\n${content}\n\`\`\`\n`;
+          coderTotalChars += content.length;
+        }
+      }
+      console.log(`[Coder] Context: ${context.files.length} files, ${Math.round(coderTotalChars/1000)}k chars${truncatedFiles.length > 0 ? `. Truncated (>40k): ${truncatedFiles.join(', ')}` : ''}`);
+
+      const truncationWarning = truncatedFiles.length > 0
+        ? `\nWARNING: The following files were too large to fit fully in context and were truncated: ${truncatedFiles.join(', ')}. For these files, output ONLY the specific functions/sections that need to change — do NOT output the beginning of the file followed by nothing. The system will merge your changes into the original file.`
+        : '';
+
       // Determine model based on 3-tier complexity
       let model = MODELS.CODER_LOW;
       if (context.complexity === "HIGH") {
@@ -990,10 +1017,10 @@ PLAN:
 ${context.plan}
 
 FILES TO EDIT:
-${context.codeContext}
+${fullCoderContext}
 
 INSTRUCTION:
-${INSTRUCTION}
+${INSTRUCTION}${truncationWarning}
 
 FORMAT REQUIREMENT:
 You must output each modified file wrapped strictly inside the boundary markers like this:
@@ -1005,7 +1032,7 @@ function example() {
 module.exports = { example };
 ---END_FILE: example.js---
 
-CRITICAL: You must preserve the existing outer file structure, function signatures, and module exports (e.g., module.exports = ...). Never delete the export statements.
+CRITICAL: You must preserve the existing outer file structure, function signatures, and module exports (e.g., module.exports = ...). Never delete the export statements. NEVER shorten the file by omitting pre-existing functions.
 `;
 
       const coderOutput = await queryOllama(model, coderPrompt, `You are Hiven-Coder-${KOMBEE_INDEX}, an elite coding Kōmbee.`);
@@ -1058,28 +1085,31 @@ CRITICAL: You must preserve the existing outer file structure, function signatur
       }
 
       // Helper: Code Deletion Guard
+      // Compares modified file size against the original in git HEAD
       const checkCodeDeletion = (file) => {
         const filePath = path.join(TARGET_DIR, file);
-        // We need original file size. We read it from the git object or workspace backup
         let originalSize = 0;
         try {
-          // If git is mock, use local backup or assume 0
           if (TARGET_REPO !== "mock/repo" && process.env.MOCK_GIT !== "true") {
-            const gitShow = execSync(`git show HEAD:src/${file}`, { cwd: TARGET_DIR, stdio: 'pipe' }).toString();
+            // file is already relative to repo root
+            const gitShow = execSync(`git show HEAD:${file}`, { cwd: TARGET_DIR, stdio: 'pipe' }).toString();
             originalSize = gitShow.length;
           }
         } catch (_) {
-          // Fallback: try checking if a backup target file existed in our checkout cache
+          // File is likely new (not in HEAD) — no deletion guard needed
+          return { shrunk: false };
         }
         
-        if (originalSize > 500) { // Only guard files that had substantial logic
+        if (originalSize > 500) {
           const newSize = fs.existsSync(filePath) ? fs.readFileSync(filePath, 'utf-8').length : 0;
           const ratio = newSize / originalSize;
           const isExplicitDelete = /delete|remove|cleanup|clear|vaciar|eliminar|reemplazar/i.test(INSTRUCTION);
           if (ratio < 0.5 && !isExplicitDelete) {
             return {
               shrunk: true,
-              msg: `Rejection: Code deletion safety guard triggered. The modified file size shrunk by ${Math.round((1 - ratio) * 100)}% (from ${originalSize} to ${newSize} characters), suggesting critical helper functions or classes were deleted. You MUST return the ENTIRE file containing the modifications, preserving all pre-existing functions, helper methods, and exports intact.`
+              originalSize,
+              newSize,
+              msg: `Rejection: Code deletion safety guard triggered. File '${file}' shrunk by ${Math.round((1 - ratio) * 100)}% (from ${originalSize} to ${newSize} chars). Critical functions were likely deleted. You MUST return the ENTIRE file with ONLY the requested changes applied, preserving all pre-existing functions, helpers, and exports.`
             };
           }
         }
@@ -1208,8 +1238,9 @@ Respond ONLY with a JSON object containing:
           for (const file of modifiedFiles) {
             try {
               if (TARGET_REPO !== "mock/repo" && process.env.MOCK_GIT !== "true") {
-                const gitShow = execSync(`git show HEAD:src/${file}`, { cwd: TARGET_DIR, stdio: 'pipe' }).toString();
-                originalFilesContext += `\n### ORIGINAL File: ${file}\n\`\`\`\n${gitShow}\n\`\`\`\n`;
+                // file is already relative to repo root (e.g. src/zenon.js) — no src/ prefix
+                const gitShow = execSync(`git show HEAD:${file}`, { cwd: TARGET_DIR, stdio: 'pipe' }).toString();
+                originalFilesContext += `\n### ORIGINAL File: ${file}\n\`\`\`\n${gitShow.slice(0, 40000)}\n\`\`\`\n`;
               }
             } catch (_) {}
           }
