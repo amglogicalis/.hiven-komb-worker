@@ -212,6 +212,56 @@ function sendTelemetry(state, message) {
   });
 }
 
+// ==========================================
+// FEDERATED PATTERN LEARNING
+// Loads/saves abstract swarm patterns via Queen API
+// ==========================================
+async function loadFederatedPatterns(instruction, fileExtensions) {
+  if (!DRONE_UPLINK_URL) return [];
+  try {
+    const queenBase = DRONE_UPLINK_URL.replace('/telemetry', '');
+    const fileType = fileExtensions[0] || 'js';
+    const url = `${queenBase}/api/patterns/load?fileType=${encodeURIComponent(fileType)}`;
+    const lib = url.startsWith('https') ? https : http;
+    return await new Promise((resolve) => {
+      lib.get(url, (res) => {
+        let data = '';
+        res.on('data', c => data += c);
+        res.on('end', () => {
+          try {
+            const parsed = JSON.parse(data);
+            resolve(parsed.patterns || []);
+          } catch { resolve([]); }
+        });
+      }).on('error', () => resolve([]));
+    });
+  } catch { return []; }
+}
+
+async function saveFederatedPattern(fileType, instruction, outcome) {
+  if (!DRONE_UPLINK_URL) return;
+  try {
+    const queenBase = DRONE_UPLINK_URL.replace('/telemetry', '');
+    const pattern = {
+      fileType,
+      instruction: instruction.substring(0, 120),
+      outcome,
+      timestamp: new Date().toISOString()
+    };
+    const payload = JSON.stringify({ fileType, pattern });
+    const url = new URL(`${queenBase}/api/patterns/save`);
+    const lib = url.protocol === 'https:' ? https : http;
+    const req = lib.request(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) }
+    }, (res) => { res.resume(); });
+    req.on('error', () => {});
+    req.write(payload);
+    req.end();
+    console.log(`[+] Federated pattern saved for type: ${fileType}`);
+  } catch { /* non-blocking */ }
+}
+
 // Helper to execute git command on target directory
 function runGit(args, options = {}) {
   if (TARGET_REPO === "mock/repo" || process.env.MOCK_GIT === "true") {
@@ -661,8 +711,32 @@ Respond ONLY with a single JSON object containing "complexity" ("LOW", "MEDIUM",
       console.log(`[*] Pulling planner model ${plannerModel}...`);
       execSync(`ollama pull ${plannerModel}`, { stdio: "inherit" });
 
-      // 2. Task Decomposition (Option A)
+      // 2. Task Decomposition with Federated Pattern Injection
       console.log("[*] Running Architect Kōmbee to decompose instruction...");
+
+      // Load federated patterns from previous swarms
+      const fileExts = files.map(f => f.split('.').pop()).filter(Boolean);
+      const uniqueExts = [...new Set(fileExts)].slice(0, 3);
+      let patternsSection = '';
+      try {
+        const allPatterns = [];
+        for (const ext of uniqueExts) {
+          const p = await loadFederatedPatterns(INSTRUCTION, [ext]);
+          allPatterns.push(...p);
+        }
+        if (allPatterns.length > 0) {
+          const dosAndDonts = allPatterns.slice(-5).map(p =>
+            `- [${p.outcome}] ${p.instruction}`
+          ).join('\n');
+          patternsSection = `\n\nFEDERATED SWARM MEMORY (Do's and Don'ts from previous runs):\n${dosAndDonts}`;
+          console.log(`[+] Federated patterns loaded: ${allPatterns.length} patterns found.`);
+        } else {
+          console.log('[*] No federated patterns yet for this file type. Starting fresh.');
+        }
+      } catch (e) {
+        console.warn('[-] Failed to load federated patterns (non-blocking):', e.message);
+      }
+
       const contextPrompt = `
 You are a senior software architect. Analyze the COMPLETE source code of the repository below and the developer instruction.
 Write a precise, step-by-step implementation plan separating the work into atomic micro-tasks.
@@ -676,7 +750,7 @@ DEVELOPER INSTRUCTION:
 ${INSTRUCTION}
 
 STYLE CACHE (previous preferences):
-${JSON.stringify(honeyDb.stylePreferences)}
+${JSON.stringify(honeyDb.stylePreferences)}${patternsSection}
 
 Output a numbered list of concrete implementation steps, each referencing specific files and functions.
 `;
@@ -1127,6 +1201,16 @@ ${context.plan}
         honeyDb.errorSignatures[crypto.randomUUID().substring(0, 4)] = "Syntax issue handled via correction loop.";
       }
       saveHoneyDb(honeyDb);
+
+      // Save federated pattern if PR was created successfully
+      if (prUrl && bestCandidate.modifiedFiles) {
+        const fileExts = Object.keys(bestCandidate.modifiedFiles)
+          .map(f => f.split('.').pop()).filter(Boolean);
+        const primaryExt = [...new Set(fileExts)][0] || 'js';
+        await saveFederatedPattern(primaryExt, INSTRUCTION,
+          bestCandidate.passed ? 'SUCCESS: PR created, validation passed' : 'PARTIAL: PR created, validation had issues'
+        );
+      }
 
       if (DRONE_UPLINK_URL) {
         console.log(`[+] Routing telemetry to Drone: ${DRONE_UPLINK_URL}`);
