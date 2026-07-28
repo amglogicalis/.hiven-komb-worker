@@ -939,6 +939,19 @@ Output a numbered list of concrete implementation steps, each referencing specif
       const plan = await queryOllama(plannerModel, contextPrompt, "You are Hiven-Architect, a principal code planning agent.");
       console.log("[+] Plan Generated:\n", plan);
 
+      // MEJORA 5: Build Parallel Sub-Swarm Partitioning
+      // Group nodes by file subsets if multiple files exist
+      const partitions = [];
+      if (files.length > 1) {
+        const mid = Math.ceil(files.length / 2);
+        partitions.push({ group: 1, files: files.slice(0, mid), nodes: [1, 2, 3, 4, 5] });
+        partitions.push({ group: 2, files: files.slice(mid), nodes: [6, 7, 8, 9, 10] });
+        console.log(`[Sub-Swarms] Created 2 parallel sub-swarm partitions: Group 1 (${files.slice(0, mid).join(', ')}), Group 2 (${files.slice(mid).join(', ')})`);
+      } else {
+        partitions.push({ group: 1, files: files, nodes: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10] });
+        console.log(`[Sub-Swarms] Single file task — all 10 nodes assigned to Group 1 (${files.join(', ')})`);
+      }
+
       // Save context metadata for next stages
       const swarmContext = {
         plan,
@@ -946,7 +959,8 @@ Output a numbered list of concrete implementation steps, each referencing specif
         requiresHeavyCoder,
         files,
         codeContext,
-        projectFacts
+        projectFacts,
+        partitions
       };
       fs.writeFileSync("swarm_context.json", JSON.stringify(swarmContext, null, 2), "utf-8");
       console.log("[+] Context saved to swarm_context.json.");
@@ -964,16 +978,17 @@ Output a numbered list of concrete implementation steps, each referencing specif
       }
       await sendTelemetry("running", `Coder Node #${KOMBEE_INDEX} processing...`);
       const context = JSON.parse(fs.readFileSync("swarm_context.json", "utf-8"));
-      checkoutCodebase();
+      // MEJORA 5: Filter files for this node's partition group
+      const myPartition = (context.partitions || []).find(p => p.nodes.includes(KOMBEE_INDEX)) || { group: 1, files: context.files };
+      const nodeTargetFiles = myPartition.files.length > 0 ? myPartition.files : context.files;
+      console.log(`[Sub-Swarm Node #${KOMBEE_INDEX}] Assigned Partition Group ${myPartition.group} -> Target Files: ${nodeTargetFiles.join(', ')}`);
 
-      // Re-read files from actual checkout with higher limit (40k per file)
-      // RAG context was truncated to 8k per file — coder needs more to avoid
-      // generating partial outputs that destroy pre-existing code.
+      // Re-read assigned partition files from actual checkout
       const CODER_FILE_MAX = 40000;
       let fullCoderContext = '';
       let coderTotalChars = 0;
       const truncatedFiles = [];
-      for (const file of context.files) {
+      for (const file of nodeTargetFiles) {
         const filePath = path.join(TARGET_DIR, file);
         if (fs.existsSync(filePath)) {
           let content = fs.readFileSync(filePath, 'utf-8');
@@ -986,7 +1001,7 @@ Output a numbered list of concrete implementation steps, each referencing specif
           coderTotalChars += content.length;
         }
       }
-      console.log(`[Coder] Context: ${context.files.length} files, ${Math.round(coderTotalChars/1000)}k chars${truncatedFiles.length > 0 ? `. Truncated (>40k): ${truncatedFiles.join(', ')}` : ''}`);
+      console.log(`[Coder Node #${KOMBEE_INDEX}] Context: ${nodeTargetFiles.length} files, ${Math.round(coderTotalChars/1000)}k chars${truncatedFiles.length > 0 ? `. Truncated (>40k): ${truncatedFiles.join(', ')}` : ''}`);
 
       const truncationWarning = truncatedFiles.length > 0
         ? `\nWARNING: The following files were too large to fit fully in context and were truncated: ${truncatedFiles.join(', ')}. For these files, output ONLY the specific functions/sections that need to change — do NOT output the beginning of the file followed by nothing. The system will merge your changes into the original file.`
@@ -1040,6 +1055,7 @@ CRITICAL: You must preserve the existing outer file structure, function signatur
       // Save raw output to file
       const resultPayload = {
         kombeeIndex: KOMBEE_INDEX,
+        partitionGroup: myPartition.group,
         model,
         coderOutput
       };
@@ -1314,6 +1330,7 @@ CRITICAL: You must preserve the existing outer file structure, helper functions,
 
       const validationPayload = {
         kombeeIndex: KOMBEE_INDEX,
+        partitionGroup: coderData.partitionGroup || 1,
         model: coderData.model,
         passed: isSuccess,
         errors: errorLog,
@@ -1346,38 +1363,50 @@ CRITICAL: You must preserve the existing outer file structure, helper functions,
         }
       }
 
-      // Selection Strategy:
-      // 1. Look for passing heavy models (index 9/10).
-      // 2. Look for passing light models.
-      // 3. Fallback to first available if none passed.
-      let bestCandidate = candidates.find(c => c.passed && c.model.includes("7b"));
-      if (!bestCandidate) {
-        bestCandidate = candidates.find(c => c.passed);
+      // MEJORA 5: Multi-Group Parallel Sub-Swarm Consolidation
+      // Collect best passing candidates for EACH partition group and merge them together
+      const groups = [...new Set(candidates.map(c => c.partitionGroup || 1))];
+      const selectedCandidates = [];
+
+      for (const grp of groups) {
+        const groupCandidates = candidates.filter(c => (c.partitionGroup || 1) === grp);
+        let bestGroupCand = groupCandidates.find(c => c.passed && c.model.includes("7b"));
+        if (!bestGroupCand) {
+          bestGroupCand = groupCandidates.find(c => c.passed);
+        }
+        if (bestGroupCand) {
+          selectedCandidates.push(bestGroupCand);
+        }
       }
 
-      // If no node passed validation, do NOT create a PR — the code was invalid/destructive.
-      // Log diagnostic and exit cleanly.
-      if (!bestCandidate) {
-        const failSummary = candidates.map(c => `Node #${c.kombeeIndex}: ${c.errors?.split('\n')[0] || 'no error detail'}`).join('\n');
+      // If no node in ANY group passed validation, do NOT create a PR
+      if (selectedCandidates.length === 0) {
+        const failSummary = candidates.map(c => `Node #${c.kombeeIndex} (Group ${c.partitionGroup || 1}): ${c.errors?.split('\n')[0] || 'no error detail'}`).join('\n');
         console.error("[!] No valid candidates found. All validation nodes failed:");
         console.error(failSummary);
         await sendTelemetry("done", `[!] Swarm completed but NO valid code generated. All ${candidates.length} nodes failed validation. Check logs for details.`);
         await updateStatusComment("consolidation", "done");
-        // Save failure pattern to federated learning so future swarms avoid this mistake
         for (const ext of [...new Set(context.files.map(f => f.split('.').pop()).filter(Boolean))]) {
           await saveFederatedPattern(INSTRUCTION, ext, 'FAILED');
         }
-        process.exit(0); // Exit 0 so the action is marked green but with no PR
+        process.exit(0);
       }
 
-      if (!bestCandidate && candidates.length > 0) {
-        bestCandidate = candidates[0]; // should never reach here now
+      console.log(`[+] Selected ${selectedCandidates.length} winning sub-swarm candidates across ${groups.length} partition groups:`);
+      for (const cand of selectedCandidates) {
+        console.log(`  - Group ${cand.partitionGroup}: Node #${cand.kombeeIndex} (${cand.model})`);
       }
 
-      console.log(`[+] Best candidate selected from Kōmbee Node #${bestCandidate.kombeeIndex} (Model: ${bestCandidate.model}). Validation passed: ${bestCandidate.passed}`);
+      // Merge modified files from all winning group candidates
+      const mergedModifiedFiles = {};
+      for (const cand of selectedCandidates) {
+        for (const [file, content] of Object.entries(cand.modifiedFiles)) {
+          mergedModifiedFiles[file] = content;
+        }
+      }
 
-      // Apply changes to target directory
-      for (const [file, content] of Object.entries(bestCandidate.modifiedFiles)) {
+      // Apply merged changes to target directory
+      for (const [file, content] of Object.entries(mergedModifiedFiles)) {
         const filePath = path.join(TARGET_DIR, file);
         fs.mkdirSync(path.dirname(filePath), { recursive: true });
         fs.writeFileSync(filePath, content, "utf-8");
