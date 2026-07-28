@@ -1216,10 +1216,28 @@ Respond ONLY with a JSON object containing:
           console.warn(`[-] Attempt ${attempt} failed. Triggering correction cycle...`);
           
           if (!isOllamaAvailable()) {
-            console.warn("[!] Ollama not available in this validation runner — skipping LLM correction. Passing raw output to consolidation.");
-            // Reset to pass so consolidation can still run with whatever was written
-            isSuccess = true;
-            errorLog = "";
+            // Ollama not available — we cannot run LLM correction.
+            // If deletion guard triggered, restore the original file from git
+            // so worst case is "no change" instead of "file destroyed".
+            let restoredAny = false;
+            for (const file of modifiedFiles) {
+              try {
+                const gitOriginal = execSync(`git show HEAD:${file}`, { cwd: TARGET_DIR, stdio: 'pipe' }).toString();
+                fs.writeFileSync(path.join(TARGET_DIR, file), gitOriginal, 'utf-8');
+                console.warn(`[!] Restored original '${file}' from git HEAD (Ollama unavailable for correction).`);
+                restoredAny = true;
+              } catch (_) {
+                console.warn(`[!] Could not restore '${file}' from git — file may be new.`);
+              }
+            }
+            if (restoredAny) {
+              // Mark as passed=false so consolidation knows this node had no valid change
+              console.warn("[!] Validation marked as failed (original restored). Consolidation will prefer other nodes.");
+            } else {
+              // New file or unrestorable — pass as-is
+              isSuccess = true;
+              errorLog = "";
+            }
             break;
           }
 
@@ -1331,18 +1349,29 @@ CRITICAL: You must preserve the existing outer file structure, helper functions,
       // Selection Strategy:
       // 1. Look for passing heavy models (index 9/10).
       // 2. Look for passing light models.
-      // 3. Fallback to first available.
+      // 3. Fallback to first available if none passed.
       let bestCandidate = candidates.find(c => c.passed && c.model.includes("7b"));
       if (!bestCandidate) {
         bestCandidate = candidates.find(c => c.passed);
       }
-      if (!bestCandidate && candidates.length > 0) {
-        bestCandidate = candidates[0]; // fallback
+
+      // If no node passed validation, do NOT create a PR — the code was invalid/destructive.
+      // Log diagnostic and exit cleanly.
+      if (!bestCandidate) {
+        const failSummary = candidates.map(c => `Node #${c.kombeeIndex}: ${c.errors?.split('\n')[0] || 'no error detail'}`).join('\n');
+        console.error("[!] No valid candidates found. All validation nodes failed:");
+        console.error(failSummary);
+        await sendTelemetry("done", `[!] Swarm completed but NO valid code generated. All ${candidates.length} nodes failed validation. Check logs for details.`);
+        await updateStatusComment("consolidation", "done");
+        // Save failure pattern to federated learning so future swarms avoid this mistake
+        for (const ext of [...new Set(context.files.map(f => f.split('.').pop()).filter(Boolean))]) {
+          await saveFederatedPattern(INSTRUCTION, ext, 'FAILED');
+        }
+        process.exit(0); // Exit 0 so the action is marked green but with no PR
       }
 
-      if (!bestCandidate) {
-        console.error("[!] No generation candidates found. Swarm aborting.");
-        process.exit(1);
+      if (!bestCandidate && candidates.length > 0) {
+        bestCandidate = candidates[0]; // should never reach here now
       }
 
       console.log(`[+] Best candidate selected from Kōmbee Node #${bestCandidate.kombeeIndex} (Model: ${bestCandidate.model}). Validation passed: ${bestCandidate.passed}`);
