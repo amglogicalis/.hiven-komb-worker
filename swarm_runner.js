@@ -411,6 +411,90 @@ function harvestRepoContext(targetDir = TARGET_DIR) {
   return { codeContext, files: includedFiles, skippedFiles, totalChars };
 }
 
+// ==========================================
+// MEJORA 3: LOCAL OFFLINE RAG (TF-IDF)
+// Selects only the most relevant file chunks
+// for the instruction — cuts context 4x
+// ==========================================
+const RAG_MAX_CHARS = 22000;  // ~5.5k tokens — focused context for small models
+const RAG_TOP_FILES = 8;      // Max files to include in RAG context
+
+function tokenize(text) {
+  return text.toLowerCase()
+    .replace(/[^a-z0-9_\s]/g, ' ')
+    .split(/\s+/)
+    .filter(t => t.length > 2);
+}
+
+function buildRagContext(targetDir, instruction) {
+  console.log('[RAG] Building TF-IDF index for instruction-guided context selection...');
+  const allFiles = walkDir(targetDir);
+  if (allFiles.length === 0) return null;
+
+  // Tokenize instruction as the query
+  const queryTokens = tokenize(instruction);
+  const queryFreq = {};
+  for (const t of queryTokens) queryFreq[t] = (queryFreq[t] || 0) + 1;
+
+  // Score each file by term overlap with instruction
+  const scored = [];
+  for (const { fullPath, relativePath } of allFiles) {
+    try {
+      let content = fs.readFileSync(fullPath, 'utf-8');
+      if (content.length > MAX_FILE_CHARS) content = content.slice(0, MAX_FILE_CHARS);
+
+      const fileTokens = tokenize(content);
+      const fileFreq = {};
+      for (const t of fileTokens) fileFreq[t] = (fileFreq[t] || 0) + 1;
+
+      // TF-IDF-like score: sum of query term frequencies in the file
+      let score = 0;
+      for (const [term, qf] of Object.entries(queryFreq)) {
+        if (fileFreq[term]) score += qf * Math.log(1 + fileFreq[term]);
+      }
+
+      // Boost: filename match with any instruction word
+      const lowerPath = relativePath.toLowerCase();
+      for (const t of queryTokens) {
+        if (lowerPath.includes(t)) score += 3;
+      }
+
+      // Boost: key config files always relevant
+      if (['package.json','readme.md','main.tf','main.py','index.js','index.ts',
+           'app.js','app.py','server.js'].some(k => lowerPath.endsWith(k))) {
+        score += 2;
+      }
+
+      scored.push({ relativePath, fullPath, content, score });
+    } catch (_) { /* skip unreadable files */ }
+  }
+
+  // Sort by score descending, take top N
+  scored.sort((a, b) => b.score - a.score);
+  const topFiles = scored.slice(0, RAG_TOP_FILES);
+
+  if (topFiles.length === 0 || topFiles[0].score === 0) {
+    console.log('[RAG] No relevant files found via TF-IDF. Falling back to full harvest.');
+    return null;
+  }
+
+  let ragContext = '';
+  let totalChars = 0;
+  const includedFiles = [];
+
+  for (const { relativePath, content } of topFiles) {
+    if (totalChars >= RAG_MAX_CHARS) break;
+    const ext = path.extname(relativePath).slice(1) || '';
+    const chunk = `\n### File: ${relativePath}\n\`\`\`${ext}\n${content}\n\`\`\`\n`;
+    ragContext += chunk;
+    totalChars += content.length;
+    includedFiles.push(relativePath);
+  }
+
+  console.log(`[RAG] Selected ${includedFiles.length}/${allFiles.length} files (${Math.round(totalChars/1000)}k chars). Top: ${includedFiles.slice(0,3).join(', ')}`);
+  return { codeContext: ragContext, files: includedFiles, skippedFiles: [], totalChars };
+}
+
 // Helper to detect if a file name in plan or instruction represents a new file
 // that does not exist in the repository yet.
 function detectNewFileFromContext(content, plan, instruction) {
@@ -741,11 +825,18 @@ PROJECT FACTS (deterministic, extracted from repo):
         console.log(`[Fase 0] Specific files mode: loaded ${files.length} files.`);
         await sendTelemetry("running", `[Fase 0] Specific files mode: loaded ${files.length} files.`);
       } else {
-        // Full harvest: walk entire repo
-        const harvest = harvestRepoContext();
-        files = harvest.files;
-        codeContext = harvest.codeContext;
-        await sendTelemetry("running", `[Fase 0] Repo harvested: ${harvest.files.length} files (${Math.round(harvest.totalChars/1000)}k chars)${harvest.skippedFiles.length > 0 ? ', ' + harvest.skippedFiles.length + ' skipped (budget)' : ''}`);
+        // MEJORA 3: Try RAG first, fall back to full harvest
+        const ragResult = buildRagContext(TARGET_DIR, INSTRUCTION);
+        if (ragResult && ragResult.files.length > 0) {
+          files = ragResult.files;
+          codeContext = ragResult.codeContext;
+          await sendTelemetry("running", `[RAG] Context: ${ragResult.files.length} relevant files selected (${Math.round(ragResult.totalChars/1000)}k chars). Files: ${ragResult.files.slice(0,3).join(', ')}`);
+        } else {
+          const harvest = harvestRepoContext();
+          files = harvest.files;
+          codeContext = harvest.codeContext;
+          await sendTelemetry("running", `[Fase 0] Repo harvested: ${harvest.files.length} files (${Math.round(harvest.totalChars/1000)}k chars)${harvest.skippedFiles.length > 0 ? ', ' + harvest.skippedFiles.length + ' skipped (budget)' : ''}`);
+        }
       }
 
       // 1. Complexity Assessment & Conditional Routing (Option B Improved)
