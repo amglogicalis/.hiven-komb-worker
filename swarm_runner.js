@@ -1435,7 +1435,7 @@ CRITICAL: You must preserve the existing outer file structure, helper functions,
         await sendTelemetry("done", `[!] Swarm completed but NO valid code generated. All ${candidates.length} nodes failed validation. Check logs for details.`);
         await updateStatusComment("consolidation", "done");
         for (const ext of [...new Set(context.files.map(f => f.split('.').pop()).filter(Boolean))]) {
-          await saveFederatedPattern(INSTRUCTION, ext, 'FAILED');
+          await saveFederatedPattern(ext, INSTRUCTION, 'FAILED');
         }
         process.exit(0);
       }
