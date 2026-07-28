@@ -1535,7 +1535,7 @@ I have successfully implemented your requested changes in a new Pull Request!
 ${context.plan}
 
 #### ⚙️ Metrics:
-* **Selected Coder:** Kōmbee Node #${bestCandidate.kombeeIndex} (\`${bestCandidate.model}\`)
+* **Selected Coder:** Kōmbee Node #${mainCandidate.kombeeIndex} (\`${mainCandidate.model}\`)
 * **Complexity Level:** \`${context.complexity}\`
 `;
           } else {
@@ -1546,7 +1546,7 @@ I have completed the analysis for your request: **"${INSTRUCTION}"**
 ${context.plan}
 
 ---
-*Metrics: Coder Kōmbee Node #${bestCandidate.kombeeIndex} (${bestCandidate.model}) | Complexity: ${context.complexity}*`;
+*Metrics: Coder Kōmbee Node #${mainCandidate.kombeeIndex} (${mainCandidate.model}) | Complexity: ${context.complexity}*`;
           }
 
           await octokit.issues.createComment({
@@ -1562,19 +1562,19 @@ ${context.plan}
       }
 
       // Persist honey.db
-      honeyDb.stylePreferences.lastModel = bestCandidate.model;
-      if (!bestCandidate.passed && bestCandidate.errors) {
+      honeyDb.stylePreferences.lastModel = mainCandidate.model;
+      if (!mainCandidate.passed && mainCandidate.errors) {
         honeyDb.errorSignatures[crypto.randomUUID().substring(0, 4)] = "Syntax issue handled via correction loop.";
       }
       saveHoneyDb(honeyDb);
 
       // Save federated pattern if PR was created successfully
-      if (prUrl && bestCandidate.modifiedFiles) {
-        const fileExts = Object.keys(bestCandidate.modifiedFiles)
+      if (prUrl && mergedModifiedFiles) {
+        const fileExts = Object.keys(mergedModifiedFiles)
           .map(f => f.split('.').pop()).filter(Boolean);
         const primaryExt = [...new Set(fileExts)][0] || 'js';
         await saveFederatedPattern(primaryExt, INSTRUCTION,
-          bestCandidate.passed ? 'SUCCESS: PR created, validation passed' : 'PARTIAL: PR created, validation had issues'
+          mainCandidate.passed ? 'SUCCESS: PR created, validation passed' : 'PARTIAL: PR created, validation had issues'
         );
       }
 
