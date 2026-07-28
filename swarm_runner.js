@@ -538,8 +538,82 @@ function setupGitIdentity() {
 }
 
 // ==========================================
-// PIPELINE RUN
+// MEJORA 2: DETERMINISTIC CONTEXT EXTRACTION
+// Reads real project facts before LLM call
+// eliminates hallucinated file names and paths
 // ==========================================
+function extractProjectFacts(targetDir) {
+  const facts = {
+    name: null,
+    version: null,
+    entryPoint: null,
+    scripts: {},
+    dependencies: [],
+    devDependencies: [],
+    framework: null,
+    runtime: null,
+    language: null,
+    configFiles: []
+  };
+
+  try {
+    const pkgPath = path.join(targetDir, 'package.json');
+    if (fs.existsSync(pkgPath)) {
+      const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf-8'));
+      facts.name = pkg.name || null;
+      facts.version = pkg.version || null;
+      facts.entryPoint = pkg.main || pkg.module || null;
+      facts.scripts = pkg.scripts || {};
+      facts.dependencies = Object.keys(pkg.dependencies || {}).slice(0, 20);
+      facts.devDependencies = Object.keys(pkg.devDependencies || {}).slice(0, 10);
+      facts.runtime = pkg.engines ? JSON.stringify(pkg.engines) : 'Node.js';
+
+      // Framework detection
+      const allDeps = [...facts.dependencies, ...facts.devDependencies];
+      if (allDeps.includes('next')) facts.framework = 'Next.js';
+      else if (allDeps.includes('react')) facts.framework = 'React';
+      else if (allDeps.includes('express')) facts.framework = 'Express';
+      else if (allDeps.includes('fastify')) facts.framework = 'Fastify';
+      else if (allDeps.includes('vue')) facts.framework = 'Vue';
+      else if (allDeps.includes('svelte')) facts.framework = 'Svelte';
+      else if (allDeps.includes('nestjs') || allDeps.includes('@nestjs/core')) facts.framework = 'NestJS';
+
+      facts.language = 'JavaScript/TypeScript';
+    }
+
+    // Check for Python
+    const pyFiles = ['requirements.txt', 'pyproject.toml', 'setup.py'];
+    for (const f of pyFiles) {
+      if (fs.existsSync(path.join(targetDir, f))) {
+        facts.language = 'Python';
+        facts.runtime = 'Python';
+        break;
+      }
+    }
+
+    // Detect Terraform
+    const tfFiles = fs.readdirSync(targetDir).filter(f => f.endsWith('.tf')).slice(0, 5);
+    if (tfFiles.length > 0) {
+      facts.language = facts.language ? facts.language + '/Terraform' : 'Terraform';
+      facts.configFiles.push(...tfFiles);
+    }
+
+    // Common config files
+    const configCandidates = ['.eslintrc', '.eslintrc.js', '.eslintrc.json', 'tsconfig.json',
+      'jest.config.js', 'vite.config.js', 'webpack.config.js', 'Dockerfile', 'docker-compose.yml'];
+    for (const c of configCandidates) {
+      if (fs.existsSync(path.join(targetDir, c))) facts.configFiles.push(c);
+    }
+
+    fs.writeFileSync('project_facts.json', JSON.stringify(facts, null, 2), 'utf-8');
+    console.log('[Fase 0] Project facts extracted:', JSON.stringify(facts).substring(0, 200));
+  } catch (e) {
+    console.warn('[Fase 0] Project facts extraction partial error (non-blocking):', e.message);
+  }
+
+  return facts;
+}
+
 async function main() {
   setupGitIdentity();
   try {
@@ -635,6 +709,19 @@ async function main() {
       checkoutCodebase();
       const honeyDb = loadHoneyDb();
 
+      // MEJORA 2: Extract deterministic project facts before any LLM call
+      const projectFacts = extractProjectFacts(TARGET_DIR);
+      const factsSection = `
+PROJECT FACTS (deterministic, extracted from repo):
+- Name: ${projectFacts.name || 'unknown'}
+- Language: ${projectFacts.language || 'unknown'}
+- Framework: ${projectFacts.framework || 'none detected'}
+- Entry point: ${projectFacts.entryPoint || 'not specified'}
+- Runtime: ${projectFacts.runtime || 'unknown'}
+- Key dependencies: ${projectFacts.dependencies.slice(0, 10).join(', ') || 'none'}
+- Scripts available: ${Object.keys(projectFacts.scripts).join(', ') || 'none'}
+- Config files: ${projectFacts.configFiles.join(', ') || 'none'}
+`;
       // FASE 0: Deep repository context harvest (replaces shallow 3-file read)
       let files = [];
       let codeContext = "";
@@ -665,7 +752,7 @@ Analyze the developer instruction and files. Rate the task complexity as either 
 - LOW: Quick fixes, single-file edits, simple adjustments.
 - MEDIUM: Multi-file edits, medium refactoring, minor additions.
 - HIGH: Complex logic, algorithms, core architecture changes, database schema updates.
-
+${factsSection}
 FILES:
 ${files.join(", ")}
 
@@ -742,7 +829,7 @@ You are a senior software architect. Analyze the COMPLETE source code of the rep
 Write a precise, step-by-step implementation plan separating the work into atomic micro-tasks.
 Each task must reference REAL file names and REAL function/variable names from the code provided.
 Do NOT invent new files or functions that don't exist. Reference what you actually see below.
-
+${factsSection}
 REPOSITORY FILES (${files.length} files):
 ${codeContext}
 
@@ -764,7 +851,8 @@ Output a numbered list of concrete implementation steps, each referencing specif
         complexity,
         requiresHeavyCoder,
         files,
-        codeContext
+        codeContext,
+        projectFacts
       };
       fs.writeFileSync("swarm_context.json", JSON.stringify(swarmContext, null, 2), "utf-8");
       console.log("[+] Context saved to swarm_context.json.");
