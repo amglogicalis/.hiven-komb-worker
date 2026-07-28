@@ -373,7 +373,7 @@ function walkDir(dir, fileList = []) {
 }
 
 function harvestRepoContext(targetDir = TARGET_DIR) {
-  console.log("[Fase 0] Harvesting full repository context...");
+  console.log("[Phase 0] Harvesting full repository context...");
 
   const allFiles = walkDir(targetDir);
   // Sort by size ASC: smaller files first so we maximize file count within budget
@@ -403,9 +403,9 @@ function harvestRepoContext(targetDir = TARGET_DIR) {
     }
   }
 
-  console.log(`[Fase 0] Harvest complete: ${includedFiles.length} files included (${Math.round(totalChars / 1000)}k chars), ${skippedFiles.length} skipped (budget limit).`);
+  console.log(`[Phase 0] Harvest complete: ${includedFiles.length} files included (${Math.round(totalChars / 1000)}k chars), ${skippedFiles.length} skipped (budget limit).`);
   if (skippedFiles.length > 0) {
-    console.log("[Fase 0] Skipped (budget):", skippedFiles.slice(0, 10).join(", "));
+    console.log("[Phase 0] Skipped (budget):", skippedFiles.slice(0, 10).join(", "));
   }
 
   return { codeContext, files: includedFiles, skippedFiles, totalChars };
@@ -427,7 +427,7 @@ function tokenize(text) {
 }
 
 function buildRagContext(targetDir, instruction) {
-  console.log('[RAG] Building TF-IDF index for instruction-guided context selection...');
+  console.log('[Phase RAG] Building TF-IDF index for instruction-guided context selection...');
   const allFiles = walkDir(targetDir);
   if (allFiles.length === 0) return null;
 
@@ -474,7 +474,7 @@ function buildRagContext(targetDir, instruction) {
   const topFiles = scored.slice(0, RAG_TOP_FILES);
 
   if (topFiles.length === 0 || topFiles[0].score === 0) {
-    console.log('[RAG] No relevant files found via TF-IDF. Falling back to full harvest.');
+    console.log('[Phase RAG] No relevant files found via TF-IDF. Falling back to full harvest.');
     return null;
   }
 
@@ -491,7 +491,7 @@ function buildRagContext(targetDir, instruction) {
     includedFiles.push(relativePath);
   }
 
-  console.log(`[RAG] Selected ${includedFiles.length}/${allFiles.length} files (${Math.round(totalChars/1000)}k chars). Top: ${includedFiles.slice(0,3).join(', ')}`);
+  console.log(`[Phase RAG] Selected ${includedFiles.length}/${allFiles.length} files (${Math.round(totalChars/1000)}k chars). Top: ${includedFiles.slice(0,3).join(', ')}`);
   return { codeContext: ragContext, files: includedFiles, skippedFiles: [], totalChars };
 }
 
@@ -690,9 +690,9 @@ function extractProjectFacts(targetDir) {
     }
 
     fs.writeFileSync('project_facts.json', JSON.stringify(facts, null, 2), 'utf-8');
-    console.log('[Fase 0] Project facts extracted:', JSON.stringify(facts).substring(0, 200));
+    console.log('[Phase 0] Project facts extracted:', JSON.stringify(facts).substring(0, 200));
   } catch (e) {
-    console.warn('[Fase 0] Project facts extraction partial error (non-blocking):', e.message);
+    console.warn('[Phase 0] Project facts extraction partial error (non-blocking):', e.message);
   }
 
   return facts;
@@ -795,7 +795,7 @@ async function main() {
 
       // MEJORA 2: Extract deterministic project facts before any LLM call
       const projectFacts = extractProjectFacts(TARGET_DIR);
-      await sendTelemetry("running", `[Fase 0] Project facts: lang=${projectFacts.language || 'unknown'}, framework=${projectFacts.framework || 'none'}, entry=${projectFacts.entryPoint || 'n/a'}, deps=${projectFacts.dependencies.slice(0,5).join(',')||'none'}`);
+      await sendTelemetry("running", `[Phase 0] Project facts: lang=${projectFacts.language || 'unknown'}, framework=${projectFacts.framework || 'none'}, entry=${projectFacts.entryPoint || 'n/a'}, deps=${projectFacts.dependencies.slice(0,5).join(',')||'none'}`);
       const factsSection = `
 PROJECT FACTS (deterministic, extracted from repo):
 - Name: ${projectFacts.name || 'unknown'}
@@ -822,20 +822,20 @@ PROJECT FACTS (deterministic, extracted from repo):
             codeContext += `\n### File: ${file}\n\`\`\`${ext}\n${content}\n\`\`\`\n`;
           }
         }
-        console.log(`[Fase 0] Specific files mode: loaded ${files.length} files.`);
-        await sendTelemetry("running", `[Fase 0] Specific files mode: loaded ${files.length} files.`);
+        console.log(`[Phase 0] Specific files mode: loaded ${files.length} files.`);
+        await sendTelemetry("running", `[Phase 0] Specific files mode: loaded ${files.length} files.`);
       } else {
         // MEJORA 3: Try RAG first, fall back to full harvest
         const ragResult = buildRagContext(TARGET_DIR, INSTRUCTION);
         if (ragResult && ragResult.files.length > 0) {
           files = ragResult.files;
           codeContext = ragResult.codeContext;
-          await sendTelemetry("running", `[RAG] Context: ${ragResult.files.length} relevant files selected (${Math.round(ragResult.totalChars/1000)}k chars). Files: ${ragResult.files.slice(0,3).join(', ')}`);
+          await sendTelemetry("running", `[Phase RAG] Context: ${ragResult.files.length} relevant files selected (${Math.round(ragResult.totalChars/1000)}k chars). Files: ${ragResult.files.slice(0,3).join(', ')}`);
         } else {
           const harvest = harvestRepoContext();
           files = harvest.files;
           codeContext = harvest.codeContext;
-          await sendTelemetry("running", `[Fase 0] Repo harvested: ${harvest.files.length} files (${Math.round(harvest.totalChars/1000)}k chars)${harvest.skippedFiles.length > 0 ? ', ' + harvest.skippedFiles.length + ' skipped (budget)' : ''}`);
+          await sendTelemetry("running", `[Phase 0] Repo harvested: ${harvest.files.length} files (${Math.round(harvest.totalChars/1000)}k chars)${harvest.skippedFiles.length > 0 ? ', ' + harvest.skippedFiles.length + ' skipped (budget)' : ''}`);
         }
       }
 
@@ -1049,52 +1049,99 @@ CRITICAL: You must preserve the existing outer file structure, function signatur
         modifiedFiles.push(fileName);
       }
 
-      // Run syntax checks (Validation Kōmbees)
-      let isSuccess = true;
-      let errorLog = "";
-
       if (modifiedFiles.length === 0 && context.files.length > 0) {
         // Fallback writing using smart helper
         const writtenFile = writeCodeCleanly(coderData.coderOutput, context.files[0], context.files, context.plan, INSTRUCTION);
         if (writtenFile) {
           modifiedFiles.push(writtenFile);
-        } else {
-          isSuccess = false;
-          errorLog += "Failed to parse code output: Coder model returned invalid layout or JSON changes.\n";
         }
       }
 
-      for (const file of modifiedFiles) {
+      // Helper: Code Deletion Guard
+      const checkCodeDeletion = (file) => {
         const filePath = path.join(TARGET_DIR, file);
-        if (file.endsWith(".js")) {
-          try {
-            execSync(`node -c ${filePath}`, { stdio: "pipe" });
-          } catch (e) {
-            isSuccess = false;
-            const stderrStr = e.stderr ? e.stderr.toString() : e.message;
-            errorLog += `Syntax error in ${file}:\n${stderrStr}\n`;
+        // We need original file size. We read it from the git object or workspace backup
+        let originalSize = 0;
+        try {
+          // If git is mock, use local backup or assume 0
+          if (TARGET_REPO !== "mock/repo" && process.env.MOCK_GIT !== "true") {
+            const gitShow = execSync(`git show HEAD:src/${file}`, { cwd: TARGET_DIR, stdio: 'pipe' }).toString();
+            originalSize = gitShow.length;
+          }
+        } catch (_) {
+          // Fallback: try checking if a backup target file existed in our checkout cache
+        }
+        
+        if (originalSize > 500) { // Only guard files that had substantial logic
+          const newSize = fs.existsSync(filePath) ? fs.readFileSync(filePath, 'utf-8').length : 0;
+          const ratio = newSize / originalSize;
+          const isExplicitDelete = /delete|remove|cleanup|clear|vaciar|eliminar|reemplazar/i.test(INSTRUCTION);
+          if (ratio < 0.5 && !isExplicitDelete) {
+            return {
+              shrunk: true,
+              msg: `Rejection: Code deletion safety guard triggered. The modified file size shrunk by ${Math.round((1 - ratio) * 100)}% (from ${originalSize} to ${newSize} characters), suggesting critical helper functions or classes were deleted. You MUST return the ENTIRE file containing the modifications, preserving all pre-existing functions, helper methods, and exports intact.`
+            };
           }
         }
-      }
+        return { shrunk: false };
+      };
 
-      // Run logical audit for MEDIUM / HIGH tasks using deepseek-r1:8b
-      // Only runs if Ollama is available in this runner environment
       const isOllamaAvailable = () => {
         try { execSync('ollama --version', { stdio: 'pipe' }); return true; } catch { return false; }
       };
 
-      if (isSuccess && (context.complexity === "MEDIUM" || context.complexity === "HIGH") && isOllamaAvailable()) {
-        console.log(`[*] Task complexity is ${context.complexity}. Running logical code audit with ${MODELS.VALIDATOR_HIGH}...`);
-        
-        let codeChanges = "";
+      let isSuccess = false;
+      let errorLog = "";
+      const maxAttempts = 3;
+
+      for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+        console.log(`[*] Validation Attempt ${attempt}/${maxAttempts} for Node #${KOMBEE_INDEX}...`);
+        isSuccess = true;
+        errorLog = "";
+
+        if (modifiedFiles.length === 0) {
+          isSuccess = false;
+          errorLog += "Failed to parse code output: Coder model returned invalid layout or empty/JSON response.\n";
+        }
+
+        // 1. Check syntax and code deletion for all modified files
         for (const file of modifiedFiles) {
           const filePath = path.join(TARGET_DIR, file);
-          if (fs.existsSync(filePath)) {
-            codeChanges += `\n### File: ${file}\n\`\`\`\n${fs.readFileSync(filePath, "utf-8")}\n\`\`\`\n`;
+          
+          // Code Deletion Guard check
+          const delCheck = checkCodeDeletion(file);
+          if (delCheck.shrunk) {
+            isSuccess = false;
+            errorLog += `Logic error in ${file}:\n${delCheck.msg}\n`;
+            console.log(chalk.red(`[-] ${delCheck.msg}`));
+            continue;
+          }
+
+          if (file.endsWith(".js")) {
+            try {
+              execSync(`node -c ${filePath}`, { stdio: "pipe" });
+            } catch (e) {
+              isSuccess = false;
+              const stderrStr = e.stderr ? e.stderr.toString() : e.message;
+              errorLog += `Syntax error in ${file}:\n${stderrStr}\n`;
+              console.log(chalk.red(`[-] Syntax check failed: ${file}`));
+            }
           }
         }
 
-        const auditPrompt = `
+        // 2. Run logical audit for MEDIUM / HIGH tasks using deepseek-r1:8b (only if syntax/deletion checks passed)
+        if (isSuccess && (context.complexity === "MEDIUM" || context.complexity === "HIGH") && isOllamaAvailable()) {
+          console.log(`[*] Run logical code audit with ${MODELS.VALIDATOR_HIGH}...`);
+          
+          let codeChanges = "";
+          for (const file of modifiedFiles) {
+            const filePath = path.join(TARGET_DIR, file);
+            if (fs.existsSync(filePath)) {
+              codeChanges += `\n### File: ${file}\n\`\`\`\n${fs.readFileSync(filePath, "utf-8")}\n\`\`\`\n`;
+            }
+          }
+
+          const auditPrompt = `
 You are Hiven-Validator-Auditor. You must verify if the refactored code correctly implements the developer's instructions and has no logical bugs, security vulnerabilities, or regression errors.
 
 INSTRUCTION:
@@ -1109,108 +1156,107 @@ Respond ONLY with a JSON object containing:
 "reason": "Detail why it is approved or what logical bug was found."
 `;
 
-        try {
-          execSync(`ollama pull ${MODELS.VALIDATOR_HIGH}`, { stdio: "inherit" });
-          const auditResp = await queryOllama(MODELS.VALIDATOR_HIGH, auditPrompt, "You are Hiven-Validator-Auditor. Output JSON only.");
-          console.log("[+] Auditor Response:", auditResp);
-          
-          const cleanJson = auditResp.replace(/```[a-zA-Z]*\n([\s\S]*?)\n```/g, "$1").replace(/```json|```/g, "").trim();
-          const parsed = JSON.parse(cleanJson);
-          if (parsed.approved === false) {
-            isSuccess = false;
-            errorLog += `Logical Audit Bug Found by Validator Auditor:\n${parsed.reason}\n`;
-            console.log(chalk.red(`[-] Logical audit failed: ${parsed.reason}`));
-          } else {
-            console.log(chalk.green(`[+] Logical audit approved: ${parsed.reason}`));
+          try {
+            execSync(`ollama pull ${MODELS.VALIDATOR_HIGH}`, { stdio: "inherit" });
+            const auditResp = await queryOllama(MODELS.VALIDATOR_HIGH, auditPrompt, "You are Hiven-Validator-Auditor. Output JSON only.");
+            console.log("[+] Auditor Response:", auditResp);
+            
+            const cleanJson = auditResp.replace(/```[a-zA-Z]*\n([\s\S]*?)\n```/g, "$1").replace(/```json|```/g, "").trim();
+            const parsed = JSON.parse(cleanJson);
+            if (parsed.approved === false) {
+              isSuccess = false;
+              errorLog += `Logical Audit Bug Found by Validator Auditor:\n${parsed.reason}\n`;
+              console.log(chalk.red(`[-] Logical audit failed: ${parsed.reason}`));
+            } else {
+              console.log(chalk.green(`[+] Logical audit approved: ${parsed.reason}`));
+            }
+          } catch (e) {
+            console.error("[-] Logical audit crashed/skipped:", e.message);
           }
-        } catch (e) {
-          console.error("[-] Logical audit crashed/skipped:", e.message);
         }
-      } else if (!isOllamaAvailable()) {
-        console.log("[*] Ollama not available in this runner — skipping LLM-based logical audit (syntax-only validation).");
-      }
 
-      // Self-Correction Loop — only runs if syntax validation failed AND Ollama available
-      if (!isSuccess) {
-        console.warn(`[-] Node #${KOMBEE_INDEX} validation failed. Executing correction loop...`);
-        
-        if (!isOllamaAvailable()) {
-          console.warn("[!] Ollama not available in this validation runner — skipping LLM correction. Passing raw output to consolidation.");
-          // Reset to pass so consolidation can still run with whatever was written
-          isSuccess = true;
-          errorLog = "";
-        } else {
+        // If validation passed, we are done
+        if (isSuccess) {
+          console.log(chalk.green(`[+] Validation passed on attempt ${attempt}!`));
+          break;
+        }
+
+        // If validation failed, and we have attempts remaining, run correction loop
+        if (attempt < maxAttempts) {
+          console.warn(`[-] Attempt ${attempt} failed. Triggering correction cycle...`);
+          
+          if (!isOllamaAvailable()) {
+            console.warn("[!] Ollama not available in this validation runner — skipping LLM correction. Passing raw output to consolidation.");
+            // Reset to pass so consolidation can still run with whatever was written
+            isSuccess = true;
+            errorLog = "";
+            break;
+          }
+
           let correctionModel = MODELS.CODER_LOW;
           if (context.complexity === "HIGH") {
             correctionModel = MODELS.CODER_HIGH;
           } else if (context.complexity === "MEDIUM") {
             correctionModel = KOMBEE_INDEX >= 9 ? MODELS.CODER_HIGH : MODELS.CODER_LOW;
           }
-        
-        console.log(`[*] Using correction model '${correctionModel}'...`);
-        execSync(`ollama pull ${correctionModel}`, { stdio: "inherit" });
+          
+          console.log(`[*] Using correction model '${correctionModel}'...`);
+          execSync(`ollama pull ${correctionModel}`, { stdio: "inherit" });
 
-        const correctionPrompt = `
-The following code has compilation errors:
-FEEDBACK:
+          // Include the original file contents in the correction prompt so the model has the code to restore
+          let originalFilesContext = "";
+          for (const file of modifiedFiles) {
+            try {
+              if (TARGET_REPO !== "mock/repo" && process.env.MOCK_GIT !== "true") {
+                const gitShow = execSync(`git show HEAD:src/${file}`, { cwd: TARGET_DIR, stdio: 'pipe' }).toString();
+                originalFilesContext += `\n### ORIGINAL File: ${file}\n\`\`\`\n${gitShow}\n\`\`\`\n`;
+              }
+            } catch (_) {}
+          }
+
+          const correctionPrompt = `
+The modified code failed validation checks. You must correct the errors while ensuring all original helper functions, classes, and structure are preserved. Do not delete pre-existing code.
+
+ORIGINAL SOURCE FILES FOR REFERENCE (DO NOT DELETE THE LOGIC INSIDE THESE):
+${originalFilesContext}
+
+ERRORS FOUND:
 ${errorLog}
+
+INSTRUCTION TO IMPLEMENT:
+${INSTRUCTION}
 
 Correct the code. Output the full file wrapping strictly in:
 ---START_FILE: filename---
 code here
 ---END_FILE: filename---
 
-EXAMPLE FORMAT:
----START_FILE: example.js---
-function example() {
-    return "example";
-}
-module.exports = { example };
----END_FILE: example.js---
-
-CRITICAL: You must preserve the existing outer file structure, function signatures, and module exports (e.g., module.exports = ...). Never delete the export statements.
+CRITICAL: You must preserve the existing outer file structure, helper functions, and module exports. Never delete the export statements or shorten the file.
 `;
-        const corrected = await queryOllama(correctionModel, correctionPrompt, "You are Hiven-Correction-Kōmbee.");
-        
-        // Rewrite
-        let matchCorr;
-        modifiedFiles = [];
-        const regexCorr = /---START_FILE:\s*([^\s-]+)---\n([\s\S]*?)\n---END_FILE:\s*\1---/g;
-        while ((matchCorr = regexCorr.exec(corrected)) !== null) {
-          const fileName = matchCorr[1].trim();
-          const newContent = matchCorr[2];
-          const filePath = path.join(TARGET_DIR, fileName);
-          fs.mkdirSync(path.dirname(filePath), { recursive: true });
-          fs.writeFileSync(filePath, newContent, "utf-8");
-          modifiedFiles.push(fileName);
-        }
-
-        if (modifiedFiles.length === 0 && context.files.length > 0) {
-          const writtenFile = writeCodeCleanly(corrected, context.files[0], context.files, context.plan, INSTRUCTION);
-          if (writtenFile) {
-            modifiedFiles.push(writtenFile);
-          } else {
-            isSuccess = false;
-            errorLog += "Post-correction: failed to parse code output.\n";
+          await sendTelemetry("running", `Validator Node #${KOMBEE_INDEX} running correction loop (Attempt ${attempt}/${maxAttempts})...`);
+          const corrected = await queryOllama(correctionModel, correctionPrompt, "You are Hiven-Correction-Kōmbee.");
+          
+          // Rewrite modified files with correction output
+          let matchCorr;
+          modifiedFiles = [];
+          const regexCorr = /---START_FILE:\s*([^\s-]+)---\n([\s\S]*?)\n---END_FILE:\s*\1---/g;
+          while ((matchCorr = regexCorr.exec(corrected)) !== null) {
+            const fileName = matchCorr[1].trim();
+            const newContent = matchCorr[2];
+            const filePath = path.join(TARGET_DIR, fileName);
+            fs.mkdirSync(path.dirname(filePath), { recursive: true });
+            fs.writeFileSync(filePath, newContent, "utf-8");
+            modifiedFiles.push(fileName);
           }
-        }
-        
-        // Re-verify
-        isSuccess = true;
-        errorLog = "";
-        for (const file of modifiedFiles) {
-          if (file.endsWith(".js")) {
-            try {
-              execSync(`node -c ${path.join(TARGET_DIR, file)}`, { stdio: "pipe" });
-            } catch (e) {
-              isSuccess = false;
-              const stderrStr = e.stderr ? e.stderr.toString() : e.message;
-              errorLog += `Post-correction syntax error in ${file}:\n${stderrStr}\n`;
+
+          if (modifiedFiles.length === 0 && context.files.length > 0) {
+            const writtenFile = writeCodeCleanly(corrected, context.files[0], context.files, context.plan, INSTRUCTION);
+            if (writtenFile) {
+              modifiedFiles.push(writtenFile);
             }
           }
         }
-        } // end else (ollama available)
-      } // end if (!isSuccess)
+      } // end attempt loop
 
       const fileMap = {};
       for (const file of modifiedFiles) {
