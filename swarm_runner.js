@@ -711,6 +711,7 @@ async function main() {
 
       // MEJORA 2: Extract deterministic project facts before any LLM call
       const projectFacts = extractProjectFacts(TARGET_DIR);
+      await sendTelemetry("running", `[Fase 0] Project facts: lang=${projectFacts.language || 'unknown'}, framework=${projectFacts.framework || 'none'}, entry=${projectFacts.entryPoint || 'n/a'}, deps=${projectFacts.dependencies.slice(0,5).join(',')||'none'}`);
       const factsSection = `
 PROJECT FACTS (deterministic, extracted from repo):
 - Name: ${projectFacts.name || 'unknown'}
@@ -738,11 +739,13 @@ PROJECT FACTS (deterministic, extracted from repo):
           }
         }
         console.log(`[Fase 0] Specific files mode: loaded ${files.length} files.`);
+        await sendTelemetry("running", `[Fase 0] Specific files mode: loaded ${files.length} files.`);
       } else {
         // Full harvest: walk entire repo
         const harvest = harvestRepoContext();
         files = harvest.files;
         codeContext = harvest.codeContext;
+        await sendTelemetry("running", `[Fase 0] Repo harvested: ${harvest.files.length} files (${Math.round(harvest.totalChars/1000)}k chars)${harvest.skippedFiles.length > 0 ? ', ' + harvest.skippedFiles.length + ' skipped (budget)' : ''}`);
       }
 
       // 1. Complexity Assessment & Conditional Routing (Option B Improved)
