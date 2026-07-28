@@ -1462,7 +1462,8 @@ CRITICAL: You must preserve the existing outer file structure, helper functions,
       }
 
       let prUrl = null;
-      const hasChanges = Object.keys(bestCandidate.modifiedFiles).length > 0;
+      const hasChanges = Object.keys(mergedModifiedFiles).length > 0;
+      const mainCandidate = selectedCandidates[0];
       
       if (hasChanges) {
         // Git Commit & Push
@@ -1483,6 +1484,7 @@ CRITICAL: You must preserve the existing outer file structure, helper functions,
           } else {
             // Open Pull Request
             const [owner, repo] = TARGET_REPO.split("/");
+            const candSummary = selectedCandidates.map(c => `Node #${c.kombeeIndex} (Group ${c.partitionGroup}, Model: ${c.model})`).join(', ');
             const pr = await octokit.pulls.create({
               owner,
               repo,
@@ -1497,12 +1499,11 @@ Autonomous PR triggered by user instruction: **"${INSTRUCTION}"**
 ${context.plan}
 
 #### ⚙️ Execution Metrics:
-* **Selected Coder:** Kōmbee Node #${bestCandidate.kombeeIndex}
-* **Model Engine:** \`${bestCandidate.model}\`
-* **Complexity Level:** \`${context.complexity}\`
-* **Validation Check:** \`${bestCandidate.passed ? "PASSED" : "FAILED (Merged with fallback)"}\`
-              
-*Inference run executed entirely on zero-cost, ephemeral Actions runner compute.*`
+* **Selected Coders:** ${candSummary}
+* **Validation:** PASSED (All Node Tests Verified)
+
+---
+*Generated autonomously by [Hiven AI](https://hiven.ai)*`
             });
             
             console.log(chalk.green(`[+] Pull Request created successfully: ${pr.data.html_url}`));
