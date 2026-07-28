@@ -1175,6 +1175,54 @@ CRITICAL: You must preserve the existing outer file structure, function signatur
           }
         }
 
+        // MEJORA 6: SHADOW SANDBOX DRY-RUN EXECUTION
+        // Discovers and executes local unit tests / test scripts to verify changes in runtime
+        if (isSuccess) {
+          try {
+            // Check for test files in repo
+            const testFiles = [];
+            for (const f of context.files) {
+              if (/test[._-]|spec[._-]|[._-]test\.|[._-]spec\./i.test(f) && fs.existsSync(path.join(TARGET_DIR, f))) {
+                testFiles.push(f);
+              }
+            }
+
+            if (testFiles.length > 0) {
+              console.log(`[Shadow Sandbox] Found ${testFiles.length} test files. Executing dry-run runtime validation...`);
+              for (const tf of testFiles.slice(0, 3)) { // Run up to 3 test files
+                const tfPath = path.join(TARGET_DIR, tf);
+                if (tf.endsWith('.js')) {
+                  try {
+                    execSync(`node ${tfPath}`, { cwd: TARGET_DIR, stdio: 'pipe', timeout: 10000 });
+                    console.log(chalk.green(`[+] Shadow Sandbox: Test '${tf}' PASSED cleanly.`));
+                  } catch (e) {
+                    isSuccess = false;
+                    const testErr = e.stderr ? e.stderr.toString() : (e.stdout ? e.stdout.toString() : e.message);
+                    errorLog += `Shadow Sandbox Test Failure in '${tf}':\n${testErr.substring(0, 1000)}\n`;
+                    console.log(chalk.red(`[-] Shadow Sandbox Test FAILED: '${tf}'`));
+                  }
+                }
+              }
+            } else if (context.projectFacts && context.projectFacts.scripts && context.projectFacts.scripts.test) {
+              const testCmd = context.projectFacts.scripts.test;
+              if (!testCmd.includes('no test specified') && !testCmd.includes('exit 1')) {
+                console.log(`[Shadow Sandbox] Executing package test script: '${testCmd}'...`);
+                try {
+                  execSync(`npm test --if-present`, { cwd: TARGET_DIR, stdio: 'pipe', timeout: 15000 });
+                  console.log(chalk.green(`[+] Shadow Sandbox: 'npm test' PASSED cleanly.`));
+                } catch (e) {
+                  isSuccess = false;
+                  const testErr = e.stderr ? e.stderr.toString() : (e.stdout ? e.stdout.toString() : e.message);
+                  errorLog += `Shadow Sandbox 'npm test' Failure:\n${testErr.substring(0, 1000)}\n`;
+                  console.log(chalk.red(`[-] Shadow Sandbox 'npm test' FAILED.`));
+                }
+              }
+            }
+          } catch (sandboxErr) {
+            console.warn(`[!] Shadow Sandbox execution skipped/errored:`, sandboxErr.message);
+          }
+        }
+
         // 2. Run logical audit for MEDIUM / HIGH tasks using deepseek-r1:8b (only if syntax/deletion checks passed)
         if (isSuccess && (context.complexity === "MEDIUM" || context.complexity === "HIGH") && isOllamaAvailable()) {
           console.log(`[*] Run logical code audit with ${MODELS.VALIDATOR_HIGH}...`);
